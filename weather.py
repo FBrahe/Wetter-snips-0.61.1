@@ -2,6 +2,7 @@
 import requests
 import datetime
 import random
+weekday_arr=("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
 
 
 class Weather:
@@ -21,10 +22,14 @@ class Weather:
         except KeyError:
             self.units = "metric"
 
-    def parse_open_weather_map_forecast_response(self, response, location):
+    def parse_open_weather_map_forecast_response(self, response, location,date_requested):
         # Parse the output of Open Weather Map's forecast endpoint
         try:
-            today = self.fromtimestamp(response["list"][0]["dt"]).day
+            today_old = self.fromtimestamp(response["list"][0]["dt"]).day
+            print(date_requested)
+            today=int(date_requested.split("-")[2])
+            time_difference=today-today_old
+            #print("today=",self.fromtimestamp(response["list"][0]["dt"]).day)
             today_forecasts = list(
                 filter(lambda forecast: self.fromtimestamp(forecast["dt"]).day == today, response["list"]))
 
@@ -43,7 +48,8 @@ class Weather:
                 "temperatureMax": int(max(all_max)),
                 "rain": len(rain) > 0,
                 "snow": len(snow) > 0,
-                "mainCondition": max(set(all_conditions), key=all_conditions.count).lower()
+                "mainCondition": max(set(all_conditions), key=all_conditions.count).lower(),
+                "time_difference":time_difference
             }
         except KeyError:  # error 404 (locality not found or api key is wrong)
             return {'rc': 2}
@@ -68,11 +74,17 @@ class Weather:
     def get_weather_forecast(self, intentMessage):
         # Parse the query slots, and fetch the weather forecast from Open Weather Map's API
         locations = []
+        date_requested=datetime.datetime.now().strftime("%Y-%m-%d") 
         if isinstance(intentMessage.slots,dict):
             for (slot_value, slot) in intentMessage.slots.items():
                 if slot_value not in ['forecast_condition_name', 'forecast_start_date_time',
                                       'forecast_item', 'forecast_temperature_name']:
                     locations.append(slot[0].slot_value.value)
+                elif slot_value == 'forecast_start_date_time':
+                    print("anderes Datum")
+                    date_requested=intentMessage.slots.forecast_start_date_time.first().value
+                    date_requested=date_requested.split(' ')[0]#.split(" ")[0]
+                    print(date_requested)
         location_objects = [loc_obj for loc_obj in locations if loc_obj is not None]
         if location_objects:
             location = location_objects[0].value.encode('utf8')
@@ -82,7 +94,7 @@ class Weather:
             self.weather_api_base_url, location, self.weather_api_key, self.units)
         try:
             r_forecast = requests.get(forecast_url)
-            return self.parse_open_weather_map_forecast_response(r_forecast.json(), location)
+            return self.parse_open_weather_map_forecast_response(r_forecast.json(), location,date_requested)
         except (requests.exceptions.ConnectionError, ValueError):
             return {'rc': 1}  # Error: No internet connection
 
@@ -107,7 +119,23 @@ class Weather:
         if weather_forecast['rc'] != 0:
             response = self.error_response(weather_forecast)
         else:
-            response = ("Wetter heute{1}: {0}. "
+            if weather_forecast["time_difference"]==0:
+                day_string="heute"
+            elif weather_forecast["time_difference"]==1:
+                day_string="morgen"
+            else:
+                temp_day=datetime.datetime.today().weekday()+weather_forecast["time_difference"]
+                if temp_day > 13:
+                    day_string=""
+                elif temp_day > 6:
+                    temp_day=temp_day-7
+                    day_string="am " + weekday_arr[temp_day]
+                
+                elif temp_day > 1:
+                    day_string="am " + weekday_arr[temp_day]
+              
+    
+            response = ("Wetter {5} {1}: {0}. "
                         "Aktuelle Temperatur ist {2} Grad. "
                         "Höchsttemperatur: {3} Grad. "
                         "Tiefsttemperatur: {4} Grad.").format(
@@ -115,7 +143,8 @@ class Weather:
                 weather_forecast["inLocation"],
                 weather_forecast["temperature"],
                 weather_forecast["temperatureMax"],
-                weather_forecast["temperatureMin"]
+                weather_forecast["temperatureMin"],
+                day_string
             )
             response = self.add_warning_if_needed(response, weather_forecast)
         response = response.decode('utf8')
